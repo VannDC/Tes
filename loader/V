@@ -1937,11 +1937,11 @@ local MountainList = {
         Title = "⛰️ Yahayuk (CP 1-5)",
         Icon  = "mountain",
         URLs  = {
-            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_1.json",
-            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_2.json",
-            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_3.json",
-            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_4.json",
-            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_5.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/main/yahayuk/checkpoint_1.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/main/yahayuk/checkpoint_2.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/main/yahayuk/checkpoint_3.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/main/yahayuk/checkpoint_4.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/main/yahayuk/checkpoint_5.json",
         }
     },
     {
@@ -1979,7 +1979,7 @@ MainTab:Button({
     Color = Color3.fromHex("#3b82f6"),
     Justify = "Center",
     Callback = function()
-        if SelectedMountain then 
+        if SelectedMountain then
             LoadMountain(SelectedMountain.Title, SelectedMountain.URLs) 
         end
     end
