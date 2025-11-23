@@ -1980,10 +1980,11 @@ MainTab:Button({
     Justify = "Center",
     Callback = function()
         if SelectedMountain then
-            LoadMountain(SelectedMountain.Title, SelectedMountain.URL)
+            LoadMountain(SelectedMountain.Title, SelectedMountain.URLs) 
         end
     end
 })
+
 
 MainTab:Space({ Columns = 3 })
 
