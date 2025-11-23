@@ -40,6 +40,7 @@ local stealthConnection = nil
 _G.LoopCounter = 0
 _G.ShouldAutoRestart = false
 _G.RestartWithLoop = false
+_G.IsPlaying = false -- State Global untuk Floating Toggle
 
 -- ═══════════════════════════════════════════════════════════════
 
@@ -184,7 +185,7 @@ local function ToggleCarryAnimation(enabled)
         local success = WeldArmsForCarry()
         if success then
             WindUI:Notify({
-                Title = "� Animasi Gendong Aktif",
+                Title = "✨ Animasi Gendong Aktif",
                 Content = "animasi gendong aktig!",
                 Icon = "check-circle",
             })
@@ -199,7 +200,7 @@ local function ToggleCarryAnimation(enabled)
     else
         UnweldArmsFromCarry()
         WindUI:Notify({
-            Title = "� Animasi Gendong Nonaktif",
+            Title = "🚫 Animasi Gendong Nonaktif",
             Content = "Animas gendong dimatikan.",
             Icon = "nonaktif",
         })
@@ -748,21 +749,47 @@ function PlaybackPlayer:LoadRecording(recordingData)
         self:StopPlayback()
     end
     
+    -- Jaga-jaga jika data yang di-load sudah dalam format yang benar (array of arrays)
     local converted = {}
     for _, frame in ipairs(recordingData) do
-        if frame.time then
-            local newFrame = {frame.time, frame.x, frame.y, frame.z, frame.ry}
-            if frame.anims then newFrame[6] = frame.anims end
+        -- Cek apakah frame adalah array numerik
+        if type(frame) == "table" and #frame >= 5 and type(frame[1]) == "number" then
+            table.insert(converted, frame)
+        -- Cek apakah frame adalah objek dictionary yang perlu dikonversi
+        elseif type(frame) == "table" and frame.time and frame.position and frame.rotation then
+            -- Konversi dari JSON Object (dari format recorder) ke Array Numerik
+            local x = frame.position.x
+            local y = frame.position.y
+            local z = frame.position.z
+            local ry = frame.rotation
+            local time = frame.time
+            
+            local newFrame = {time, x, y, z, ry}
+            
+            -- Konversi data animasi jika ada (contoh sederhana berdasarkan 'state')
+            if frame.state then
+                local animName = nil
+                if frame.state == "Running" or frame.state == "Walking" then
+                    animName = frame.state .. "Anim" -- RunningAnim atau WalkingAnim
+                elseif frame.jumping then
+                    animName = "JumpAnim"
+                end
+                
+                if animName then
+                    table.insert(newFrame, {animName}) -- Index 6: Animation Data
+                end
+            end
+            
             table.insert(converted, newFrame)
         else
-            table.insert(converted, frame)
+            -- Skip frame yang tidak valid
         end
     end
-    
+
     self.recording = converted
     self:ResetHeightMarkers()
     
-    return true
+    return #self.recording > 0
 end
 
 function PlaybackPlayer:FindNearestWaypoint()
@@ -773,7 +800,7 @@ function PlaybackPlayer:FindNearestWaypoint()
     local nearestDistance = math.huge
     
     for i, frame in ipairs(self.recording) do
-        local framePos = Vector3.new(frame[2], frame[3], frame[4])
+        local framePos = Vector3.new(frame[2], frame[3] + self.heightOffset, frame[4])
         local distance = (currentPos - framePos).Magnitude
         
         if distance < nearestDistance then
@@ -791,6 +818,7 @@ function PlaybackPlayer:WalkToNearestPosition(callback)
     
     local nearestIndex, nearestDistance = self:FindNearestWaypoint()
     
+    -- Jika sudah sangat dekat, langsung panggil callback
     if nearestDistance <= 5 then
         if callback then callback(nearestIndex) end
         return true
@@ -798,7 +826,7 @@ function PlaybackPlayer:WalkToNearestPosition(callback)
     
     local targetPos = Vector3.new(
         self.recording[nearestIndex][2],
-        self.recording[nearestIndex][3],
+        self.recording[nearestIndex][3] + self.heightOffset,
         self.recording[nearestIndex][4]
     )
     
@@ -868,7 +896,14 @@ function PlaybackPlayer:PlayRecording(loop, startIndex, skipWalk)
     
     self.loopPlayback = loop or false
     self.isPlaying = true
+    _G.IsPlaying = true
     self.isPaused = false
+    
+    -- Update floating toggle UI
+    if FloatingToggleGui and FloatingToggleGui.Parent then
+        FloatingToggleGui.MainFrame.Toggle1.toggleState = true
+        FloatingToggleGui.MainFrame.Toggle1:Click()
+    end
     
     if self.animator and self.playAnimations then
         pcall(function()
@@ -1124,7 +1159,7 @@ function PlaybackPlayer:PlayRecording(loop, startIndex, skipWalk)
                         track:Stop(0.2) 
                     end
                 end
-            end)
+            })
             
             if self.isPaused then
                 break
@@ -1146,6 +1181,12 @@ function PlaybackPlayer:PlayRecording(loop, startIndex, skipWalk)
                 
                 if not self.loopPlayback then
                     shouldContinue = false
+                    _G.IsPlaying = false
+                    -- Update floating toggle UI
+                    if FloatingToggleGui and FloatingToggleGui.Parent then
+                        FloatingToggleGui.MainFrame.Toggle1.toggleState = false
+                        FloatingToggleGui.MainFrame.Toggle1:Click()
+                    end
                     break
                 end
                 
@@ -1207,6 +1248,12 @@ function PlaybackPlayer:PausePlayback()
     task.wait(0.1)
     self.isPlaying = false
     
+    -- Update floating toggle UI
+    if FloatingToggleGui and FloatingToggleGui.Parent then
+        FloatingToggleGui.MainFrame.Toggle2.isPaused = true
+        FloatingToggleGui.MainFrame.Toggle2:UpdateUI()
+    end
+    
     return true
 end
 
@@ -1224,9 +1271,15 @@ function PlaybackPlayer:ResumePaused()
     self.isPaused = false
     self.pausedIndex = nil
     
+    -- Update floating toggle UI
+    if FloatingToggleGui and FloatingToggleGui.Parent then
+        FloatingToggleGui.MainFrame.Toggle2.isPaused = false
+        FloatingToggleGui.MainFrame.Toggle2:UpdateUI()
+    end
+    
     local shouldLoop = self.loopPlayback
     
-    return self:PlayRecording(shouldLoop, idx)
+    return self:PlayRecording(shouldLoop, idx, true) -- Gunakan true untuk skip WalkToNearest
 end
 
 function PlaybackPlayer:StopPlayback()
@@ -1235,7 +1288,16 @@ function PlaybackPlayer:StopPlayback()
     end
     
     self.isPlaying = false
+    _G.IsPlaying = false
     self.isPaused = false
+    
+    -- Update floating toggle UI
+    if FloatingToggleGui and FloatingToggleGui.Parent then
+        FloatingToggleGui.MainFrame.Toggle1.toggleState = false
+        FloatingToggleGui.MainFrame.Toggle1:Click(true) -- Gunakan true untuk silent
+        FloatingToggleGui.MainFrame.Toggle2.isPaused = false
+        FloatingToggleGui.MainFrame.Toggle2:UpdateUI()
+    end
     
     if self.playbackThread then
         task.cancel(self.playbackThread)
@@ -1247,7 +1309,7 @@ function PlaybackPlayer:StopPlayback()
             for _, track in ipairs(self.animator:GetPlayingAnimationTracks()) do
                 track:Stop(0.2)
             end
-        end)
+        })
     end
 end
 
@@ -1322,7 +1384,7 @@ player.CharacterAdded:Connect(function(newChar)
         end
         
         if fpsBoostEnabled then
-            ApplyFPSBoost()
+            EnableFPSBoost() -- Pastikan panggil fungsi EnableFPSBoost, bukan ApplyFPSBoost
         end
         
         if _G.ShouldAutoRestart and playbackPlayer and #playbackPlayer.recording > 0 then
@@ -1405,25 +1467,27 @@ local Window = WindUI:CreateWindow({
 --  FLOATING TOGGLE FRAME (MUNCUL SAAT MINIMIZE)
 -- ═══════════════════════════════════════════════════════════════
 
+local FloatingToggleGui
+local isMobile = game:GetService("UserInputService").TouchEnabled and not game:GetService("UserInputService").KeyboardEnabled
+
 local function CreateFloatingToggle()
+    -- Jika sudah ada, jangan buat lagi
+    if FloatingToggleGui and FloatingToggleGui.Parent then return FloatingToggleGui end
+    
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "FloatingToggleGui"
     ScreenGui.ResetOnSpawn = false
     ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
     
-    -- Detect device type
-    local UserInputService = game:GetService("UserInputService")
-    local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-    
     local MainFrame = Instance.new("Frame")
     MainFrame.Name = "MainFrame"
     -- Responsive size: mobile lebih besar, PC lebih kecil
     if isMobile then
-        MainFrame.Size = UDim2.new(0, 350, 0, 140)
-        MainFrame.Position = UDim2.new(0.5, -175, 0.5, -70)
+        MainFrame.Size = UDim2.new(0, 350, 0, 190)
+        MainFrame.Position = UDim2.new(0.5, -175, 0.5, -95)
     else
-        MainFrame.Size = UDim2.new(0, 300, 0, 120)
-        MainFrame.Position = UDim2.new(0.5, -150, 0.5, -60)
+        MainFrame.Size = UDim2.new(0, 300, 0, 160)
+        MainFrame.Position = UDim2.new(0.5, -150, 0.5, -80)
     end
     MainFrame.BackgroundColor3 = Color3.fromRGB(15, 23, 42)
     MainFrame.BorderSizePixel = 0
@@ -1474,7 +1538,7 @@ local function CreateFloatingToggle()
     Title.Size = UDim2.new(1, -50, 0, 30)
     Title.Position = UDim2.new(0, 10, 0, 5)
     Title.BackgroundTransparency = 1
-    Title.Text = "Quick Controls"
+    Title.Text = "⚡ Quick Controls"
     Title.TextColor3 = Color3.fromRGB(248, 250, 252)
     Title.TextSize = isMobile and 18 or 16
     Title.Font = Enum.Font.GothamBold
@@ -1505,9 +1569,10 @@ local function CreateFloatingToggle()
             Content = "Floating controls ditutup",
             Icon = "x",
         })
+        FloatingToggleGui = nil
     end)
     
-    -- Toggle 1: Play from Nearest
+    -- Toggle 1: Play/Stop from Nearest
     local Toggle1 = Instance.new("TextButton")
     Toggle1.Name = "Toggle1"
     if isMobile then
@@ -1530,7 +1595,6 @@ local function CreateFloatingToggle()
     Toggle1Label.Size = UDim2.new(1, -60, 1, 0)
     Toggle1Label.Position = UDim2.new(0, 10, 0, 0)
     Toggle1Label.BackgroundTransparency = 1
-    Toggle1Label.Text = "📍 Play from Nearest"
     Toggle1Label.TextColor3 = Color3.fromRGB(203, 213, 225)
     Toggle1Label.TextSize = isMobile and 16 or 14
     Toggle1Label.Font = Enum.Font.Gotham
@@ -1570,33 +1634,44 @@ local function CreateFloatingToggle()
     local Toggle1KnobCorner = Instance.new("UICorner")
     Toggle1KnobCorner.CornerRadius = UDim.new(1, 0)
     Toggle1KnobCorner.Parent = Toggle1Knob
-    
-    local toggle1State = false
-    Toggle1.MouseButton1Click:Connect(function()
-        toggle1State = not toggle1State
-        
-        if toggle1State then
-            Toggle1Switch.BackgroundColor3 = Color3.fromRGB(99, 102, 241)
+
+    Toggle1.toggleState = _G.IsPlaying
+
+    local function UpdateToggle1UI()
+        if Toggle1.toggleState then
+            Toggle1Label.Text = "⏹️ **Stop** Auto Walk"
+            Toggle1Switch.BackgroundColor3 = Color3.fromHex("#10b981")
             if isMobile then
                 Toggle1Knob:TweenPosition(UDim2.new(1, -24, 0.5, -11), "Out", "Quad", 0.2, true)
             else
                 Toggle1Knob:TweenPosition(UDim2.new(1, -18, 0.5, -8), "Out", "Quad", 0.2, true)
             end
-            
-            -- Play from nearest
+        else
+            Toggle1Label.Text = "▶️ **Play** from Nearest"
+            Toggle1Switch.BackgroundColor3 = Color3.fromRGB(71, 85, 105)
+            if isMobile then
+                Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -11), "Out", "Quad", 0.2, true)
+            else
+                Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -8), "Out", "Quad", 0.2, true)
+            end
+        end
+    end
+    UpdateToggle1UI()
+
+    Toggle1.Click = function(silent)
+        if Toggle1.toggleState then
+            -- Play Logic
             if not playbackPlayer or #playbackPlayer.recording == 0 then
-                WindUI:Notify({
-                    Title = "Error",
-                    Content = "Load mountain terlebih dahulu!",
-                    Icon = "alert-circle",
-                })
-                toggle1State = false
-                Toggle1Switch.BackgroundColor3 = Color3.fromRGB(71, 85, 105)
-                if isMobile then
-                    Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -11), "Out", "Quad", 0.2, true)
-                else
-                    Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -8), "Out", "Quad", 0.2, true)
+                if not silent then
+                    WindUI:Notify({
+                        Title = "Error",
+                        Content = "Load mountain terlebih dahulu!",
+                        Icon = "alert-circle",
+                    })
                 end
+                Toggle1.toggleState = false
+                UpdateToggle1UI()
+                _G.IsPlaying = false
                 return
             end
             
@@ -1607,52 +1682,56 @@ local function CreateFloatingToggle()
             playbackPlayer:ResetHeightMarkers()
             playbackPlayer:EnsureAnimatorReady()
             
-            -- 🔄 Enhanced loop state management
             playbackPlayer.loopPlayback = isLoopEnabled
-            playbackPlayer.autoKillOnFinish = false -- Disable auto kill for smoother looping
-            _G.ShouldAutoRestart = isLoopEnabled
+            _G.ShouldAutoRestart = isLoopEnabled and playbackPlayer.autoKillOnFinish
             _G.RestartWithLoop = isLoopEnabled
             
-            -- Notify user about playback start
-            WindUI:Notify({
-                Title = "▶️ Auto Walk Started",
-                Content = isLoopEnabled and "Dengan infinite loop" or "Single run",
-                Icon = "play",
-            })
-            
-            -- Walk to nearest position first, then start playback
             local nearestIndex, nearestDistance = playbackPlayer:FindNearestWaypoint()
             
             if nearestDistance > 5 then
-                -- Walk to the nearest position
                 playbackPlayer:WalkToNearestPosition(function(reachedIndex)
-                    -- Start playback after reaching the position
                     playbackPlayer:PlayRecording(isLoopEnabled, reachedIndex, true)
                 end)
             else
-                -- Already close, start directly
                 playbackPlayer:PlayRecording(isLoopEnabled, nearestIndex, true)
             end
-        else
-            Toggle1Switch.BackgroundColor3 = Color3.fromRGB(71, 85, 105)
-            Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -8), "Out", "Quad", 0.2, true)
             
-            -- Stop
+            if not silent then
+                WindUI:Notify({
+                    Title = "▶️ Auto Walk Started",
+                    Content = isLoopEnabled and "Dengan infinite loop" or "Single run",
+                    Icon = "play",
+                })
+            end
+            _G.IsPlaying = true
+
+        else
+            -- Stop Logic
             if playbackPlayer then
                 playbackPlayer:StopPlayback()
                 playbackPlayer.loopPlayback = false
                 _G.ShouldAutoRestart = false
-                
+            end
+            
+            if not silent then
                 WindUI:Notify({
                     Title = "Stopped",
                     Content = "Auto walk dihentikan",
                     Icon = "check",
                 })
             end
+            _G.IsPlaying = false
         end
+        
+        UpdateToggle1UI()
+    end
+    
+    Toggle1.MouseButton1Click:Connect(function()
+        Toggle1.toggleState = not Toggle1.toggleState
+        Toggle1:Click()
     end)
     
-    -- Toggle 2: Reverse Rotation
+    -- Toggle 2: Pause/Resume
     local Toggle2 = Instance.new("TextButton")
     Toggle2.Name = "Toggle2"
     if isMobile then
@@ -1675,7 +1754,6 @@ local function CreateFloatingToggle()
     Toggle2Label.Size = UDim2.new(1, -60, 1, 0)
     Toggle2Label.Position = UDim2.new(0, 10, 0, 0)
     Toggle2Label.BackgroundTransparency = 1
-    Toggle2Label.Text = "🔄 Reverse Rotation"
     Toggle2Label.TextColor3 = Color3.fromRGB(203, 213, 225)
     Toggle2Label.TextSize = isMobile and 16 or 14
     Toggle2Label.Font = Enum.Font.Gotham
@@ -1715,19 +1793,20 @@ local function CreateFloatingToggle()
     local Toggle2KnobCorner = Instance.new("UICorner")
     Toggle2KnobCorner.CornerRadius = UDim.new(1, 0)
     Toggle2KnobCorner.Parent = Toggle2Knob
-    
-    local toggle2State = false
-    Toggle2.MouseButton1Click:Connect(function()
-        toggle2State = not toggle2State
-        
-        if toggle2State then
-            Toggle2Switch.BackgroundColor3 = Color3.fromRGB(99, 102, 241)
+
+    Toggle2.isPaused = false
+
+    Toggle2.UpdateUI = function()
+        if Toggle2.isPaused then
+            Toggle2Label.Text = "▶️ **Resume** Walk"
+            Toggle2Switch.BackgroundColor3 = Color3.fromHex("#84cc16")
             if isMobile then
                 Toggle2Knob:TweenPosition(UDim2.new(1, -24, 0.5, -11), "Out", "Quad", 0.2, true)
             else
                 Toggle2Knob:TweenPosition(UDim2.new(1, -18, 0.5, -8), "Out", "Quad", 0.2, true)
             end
         else
+            Toggle2Label.Text = "⏸️ **Pause** Walk"
             Toggle2Switch.BackgroundColor3 = Color3.fromRGB(71, 85, 105)
             if isMobile then
                 Toggle2Knob:TweenPosition(UDim2.new(0, 2, 0.5, -11), "Out", "Quad", 0.2, true)
@@ -1735,106 +1814,205 @@ local function CreateFloatingToggle()
                 Toggle2Knob:TweenPosition(UDim2.new(0, 2, 0.5, -8), "Out", "Quad", 0.2, true)
             end
         end
-        
-        if playbackPlayer then
-            playbackPlayer.reverseRotation = toggle2State
+    end
+    Toggle2.UpdateUI()
+
+    Toggle2.MouseButton1Click:Connect(function()
+        if not playbackPlayer or not playbackPlayer.isPlaying then
+            WindUI:Notify({
+                Title = "Error",
+                Content = "Auto Walk belum dimulai!",
+                Icon = "alert-circle",
+            })
+            return
         end
         
-        WindUI:Notify({
-            Title = toggle2State and "Enabled" or "Disabled",
-            Content = toggle2State and "Reverse rotation aktif" or "Reverse rotation nonaktif",
-            Icon = "rotate-ccw",
-        })
+        if playbackPlayer.isPaused then
+            -- Resume
+            if playbackPlayer:ResumePaused() then
+                Toggle2.isPaused = false
+                Toggle2.UpdateUI()
+                WindUI:Notify({
+                    Title = "Resumed",
+                    Content = "Auto walk dilanjutkan",
+                    Icon = "check",
+                })
+            end
+        else
+            -- Pause
+            if playbackPlayer:PausePlayback() then
+                Toggle2.isPaused = true
+                Toggle2.UpdateUI()
+                WindUI:Notify({
+                    Title = "Paused",
+                    Content = "Auto walk dijeda",
+                    Icon = "check",
+                })
+            end
+        end
     end)
-    
+
     ScreenGui.Parent = player.PlayerGui
+    FloatingToggleGui = ScreenGui
     return ScreenGui
 end
 
--- Create floating toggle
-local FloatingToggleGui = CreateFloatingToggle()
+FloatingToggleGui = CreateFloatingToggle()
 
 Window:Tag({
-    Title = "v3.0",
+    Title = "v3.0 Enhanced",
     Color = Color3.fromHex("#6366f1")
 })
 
 -- ═══════════════════════════════════════════════════════════════
---  MOUNTAIN LOADING FUNCTION
+--  MOUNTAIN LOADING FUNCTION (MODIFIED FOR MULTIPLE CHECKPOINTS)
 -- ═══════════════════════════════════════════════════════════════
 
-local function LoadMountain(name, url)
+-- ⭐ EDITING RAW GITHUB: Tambahkan atau hapus mode/checkpoint di sini.
+local MountainList = {
+    {
+        Title = "⛰️ Yahayuk (CP 1-5)",
+        Icon  = "mountain",
+        URLs  = {
+            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_1.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_2.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_3.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_4.json",
+            "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_5.json",
+        }
+    },
+    {
+        Title = "🌐 mapkedua (Single)",
+        Icon  = "globe",
+        URLs  = {
+            "https://raw.githubusercontent.com/VannDC/Uploads/main/Walk_Replays.json"
+        }
+    }
+}
+-- ⭐ END EDITING RAW GITHUB
+
+local SelectedMountain = MountainList[1]
+local IsLoading = false
+
+local function LoadMountain(name, urls)
+    if IsLoading then 
+        WindUI:Notify({Title = "Wait", Content = "Sedang memuat data lain...", Icon = "loader"})
+        return
+    end
+    IsLoading = true
+
     if not playbackPlayer then
-        WindUI:Notify({
-            Title = "Error",
-            Content = "Player belum siap!",
-            Icon = "alert-circle",
-        })
+        WindUI:Notify({Title = "Error", Content = "Player belum siap!", Icon = "alert-circle"})
+        IsLoading = false
         return
     end
     
     if playbackPlayer.isPlaying or playbackPlayer.isPaused then
         playbackPlayer:StopPlayback()
-        playbackPlayer.loopPlayback = false
-        _G.ShouldAutoRestart = false
         task.wait(0.2)
     end
     
     WindUI:Notify({
         Title = "Loading",
-        Content = "Memuat " .. name .. "...",
+        Content = "Memuat " .. name .. " (" .. #urls .. " Checkpoint)...",
         Icon = "download",
+        Duration = 5
     })
     
-    local success, response = pcall(function()
-        return game:HttpGet(url)
-    end)
-    
-    if success then
-        -- Enhanced validation
-        if not response or response == "" then
-            WindUI:Notify({
-                Title = "Error",
-                Content = "Data kosong dari server",
-                Icon = "x",
-            })
-            return
-        end
-        
-        local loadSuccess, result = pcall(function()
-            return loadstring("return " .. response)()
+    local fullRecording = {}
+    local totalFrames = 0
+    local totalDuration = 0
+    local successCount = 0
+
+    for i, url in ipairs(urls) do
+        local success, response = pcall(function()
+            return game:HttpGet(url)
         end)
         
-        if loadSuccess and type(result) == "table" and #result > 0 then
-            if playbackPlayer:LoadRecording(result) then
-                local info = playbackPlayer:GetRecordingInfo()
-                WindUI:Notify({
-                    Title = "✅ Success",
-                    Content = string.format("%s berhasil dimuat!\n📊 %d frames, %.1fs", name, info.frames, info.duration),
-                    Icon = "check",
-                    Duration = 4,
-                })
+        if success then
+            if not response or response == "" then
+                WindUI:Notify({Title = "Error", Content = string.format("Data CP %d kosong.", i), Icon = "x"})
+                continue
+            end
+            
+            local loadSuccess, result = pcall(function()
+                return loadstring("return " .. response)()
+            end)
+            
+            if loadSuccess and type(result) == "table" and #result > 0 then
+                -- Gabungkan data JSON Object dengan data Array Sederhana
+                for _, frame in ipairs(result) do
+                    -- 💖 KONVERSI DARI FORMAT JSON OBJECT (seperti yang Anda kirim) ke Array Numerik
+                    if type(frame) == "table" and frame.time and frame.position and frame.rotation then
+                        local x = frame.position.x
+                        local y = frame.position.y
+                        local z = frame.position.z
+                        local ry = frame.rotation
+                        local time = frame.time
+                        
+                        local newFrame = {time, x, y, z, ry}
+
+                        if frame.state then
+                            local animName = nil
+                            if frame.state == "Running" or frame.state == "Walking" then
+                                animName = frame.state .. "Anim"
+                            elseif frame.jumping then
+                                animName = "JumpAnim"
+                            end
+                            if animName then
+                                table.insert(newFrame, {animName})
+                            end
+                        end
+
+                        table.insert(fullRecording, newFrame)
+                    -- Jaga-jaga jika formatnya sudah Array Sederhana
+                    elseif type(frame) == "table" and #frame >= 5 and type(frame[1]) == "number" then
+                        table.insert(fullRecording, frame)
+                    end
+                end
+
+                successCount = successCount + 1
             else
-                WindUI:Notify({
-                    Title = "Error",
-                    Content = "Gagal memuat ke sistem playback",
-                    Icon = "x",
-                })
+                WindUI:Notify({Title = "Error", Content = string.format("Format data CP %d tidak valid.", i), Icon = "x"})
             end
         else
-            WindUI:Notify({
-                Title = "Error",
-                Content = "Format data tidak valid",
-                Icon = "x",
-            })
+            WindUI:Notify({Title = "Error", Content = string.format("Koneksi gagal CP %d: %s", i, tostring(response)), Icon = "wifi-off"})
         end
+    end
+    
+    -- Normalisasi Waktu: Sesuaikan waktu agar berkelanjutan (tidak dimulai dari 0 lagi di CP berikutnya)
+    if #fullRecording > 0 then
+        local offset = 0
+        local lastTime = 0
+        
+        for i, frame in ipairs(fullRecording) do
+            if frame[1] < lastTime then
+                offset = offset + lastTime 
+            end
+            frame[1] = frame[1] + offset
+            lastTime = frame[1]
+        end
+
+        totalFrames = #fullRecording
+        totalDuration = fullRecording[totalFrames][1]
+    end
+
+    if playbackPlayer:LoadRecording(fullRecording) then
+        WindUI:Notify({
+            Title = "✅ Success",
+            Content = string.format("%s berhasil dimuat! (%d Checkpoint)\n📊 %d frames, %.1fs", name, successCount, totalFrames, totalDuration),
+            Icon = "check",
+            Duration = 6,
+        })
     else
         WindUI:Notify({
-            Title = "Error",
-            Content = "Koneksi gagal: " .. tostring(response),
-            Icon = "wifi-off",
+            Title = "❌ Error",
+            Content = "Gagal memuat ke sistem playback (No frames loaded)",
+            Icon = "x",
         })
     end
+    
+    IsLoading = false
 end
 
 -- ═══════════════════════════════════════════════════════════════
@@ -1870,97 +2048,41 @@ local MainTab = MainSection:Tab({
     Icon = "home",
 })
 
--- Mountain Data 
-local MountainList = {
-    {
-        Title = "⛰️ Yahayuk",
-        Icon  = "mountain",
-        URL   = "https://raw.githubusercontent.com/VannDC/Tes/refs/heads/main/yahayuk/checkpoint_1.json"
-    },
-    {
-        Title = "🌐 mapkedua",
-        Icon  = "globe",
-        URL   = "https://raw.githubusercontent.com/VannDC/Uploads/main/Walk_Replays.json"
-    }
-}
+MainTab:Section({
+    Title = "Mountain Selection (Auto Load)",
+})
 
-local SelectedMountain = MountainList[1]
+MainTab:Space()
 
 MainTab:Dropdown({
     Title = "Select Mountain",
-    Desc  = "Choose a mountain to load",
+    Desc  = "Choose a mountain mode to load. Data akan otomatis dimuat setelah memilih!",
     Values = MountainList,
     Value  = MountainList[1],
     Callback = function(option)
         SelectedMountain = option
         WindUI:Notify({
             Title   = "Mountain Selected",
-            Content = option.Title,
-            Icon    = "check",
+            Content = option.Title .. ". Loading...",
+            Icon    = "download",
         })
+        -- 💡 OTOMATIS LOAD setelah memilih (Permintaan No. 5)
+        LoadMountain(SelectedMountain.Title, SelectedMountain.URLs)
     end
 })
 
-MainTab:Space()
-
-MainTab:Button({
-    Title = "Load Selected Mountain",
-    Icon = "download",
-    Color = Color3.fromHex("#3b82f6"),
-    Justify = "Center",
-    Callback = function()
-        if SelectedMountain then
-            LoadMountain(SelectedMountain.Title, SelectedMountain.URL)
-        end
+-- Panggil LoadMountain pertama kali saat script dijalankan (Auto Load default)
+task.spawn(function()
+    task.wait(1) -- Beri waktu WindUI dan Player inisialisasi
+    if SelectedMountain then
+        LoadMountain(SelectedMountain.Title, SelectedMountain.URLs)
     end
-})
+end)
 
 MainTab:Space({ Columns = 3 })
 
 MainTab:Section({
     Title = "Playback Controls",
-})
-
-MainTab:Space()
-
-MainTab:Button({
-    Title = "Play from Start",
-    Icon = "play",
-    Color = Color3.fromHex("#10b981"),
-    Callback = function()
-        if not playbackPlayer or #playbackPlayer.recording == 0 then
-            WindUI:Notify({
-                Title = "Error",
-                Content = "Load mountain terlebih dahulu!",
-                Icon = "alert-circle",
-            })
-            return
-        end
-        
-        playbackPlayer.isPaused = false
-        playbackPlayer.pausedIndex = nil
-        _G.LoopCounter = 0
-        
-        playbackPlayer:ResetHeightMarkers()
-        playbackPlayer.initialPlayerY = playbackPlayer.humanoidRootPart.Position.Y
-        if #playbackPlayer.recording > 0 then
-            playbackPlayer.initialRecordingY = playbackPlayer.recording[1][3]
-        end
-        playbackPlayer:CalculateHeightOffset()
-        
-        playbackPlayer:EnsureAnimatorReady()
-        
-        _G.ShouldAutoRestart = isLoopEnabled and playbackPlayer.autoKillOnFinish
-        _G.RestartWithLoop = isLoopEnabled
-        
-        if playbackPlayer:PlayRecording(isLoopEnabled, 1) then
-            WindUI:Notify({
-                Title = "Playing",
-                Content = "Auto walk dimulai!",
-                Icon = "check",
-            })
-        end
-    end
 })
 
 MainTab:Space()
@@ -1979,6 +2101,15 @@ MainTab:Button({
             return
         end
         
+        if _G.IsPlaying then
+             WindUI:Notify({
+                Title = "Already Playing",
+                Content = "Auto Walk sudah berjalan!",
+                Icon = "alert-triangle",
+            })
+            return
+        end
+
         playbackPlayer.isPaused = false
         playbackPlayer.pausedIndex = nil
         _G.LoopCounter = 0
@@ -1986,6 +2117,7 @@ MainTab:Button({
         playbackPlayer:ResetHeightMarkers()
         playbackPlayer:EnsureAnimatorReady()
         
+        playbackPlayer.loopPlayback = isLoopEnabled
         _G.ShouldAutoRestart = isLoopEnabled and playbackPlayer.autoKillOnFinish
         _G.RestartWithLoop = isLoopEnabled
         
@@ -1996,16 +2128,14 @@ MainTab:Button({
             -- Walk to the nearest position
             playbackPlayer:WalkToNearestPosition(function(reachedIndex)
                 -- Start playback after reaching the position
-                playbackPlayer:PlayRecording(isLoopEnabled, reachedIndex, true)
+                if playbackPlayer:PlayRecording(isLoopEnabled, reachedIndex, true) then
+                    WindUI:Notify({Title = "Playing", Content = "Dimulai dari posisi terdekat!", Icon = "check"})
+                end
             end)
         else
             -- Already close, start directly
             if playbackPlayer:PlayRecording(isLoopEnabled, nearestIndex, true) then
-                WindUI:Notify({
-                    Title = "Playing",
-                    Content = "Dimulai dari posisi terdekat!",
-                    Icon = "check",
-                })
+                WindUI:Notify({Title = "Playing", Content = "Dimulai dari posisi terdekat!", Icon = "check"})
             end
         end
     end
@@ -2098,13 +2228,11 @@ MainTab:Toggle({
         isLoopEnabled = state
         if state then
             _G.LoopCounter = 0
-            -- 🔄 Enhanced loop initialization
             if playbackPlayer then
                 playbackPlayer.loopPlayback = true
-                playbackPlayer.autoKillOnFinish = false -- Disable auto kill for smoother looping
+                playbackPlayer.autoKillOnFinish = false 
             end
         else
-            -- 🛑 Clean loop disable
             if playbackPlayer then
                 playbackPlayer.loopPlayback = false
             end
@@ -2188,6 +2316,27 @@ MainTab:Button({
     end
 })
 
+MainTab:Space()
+
+MainTab:Toggle({
+    Title = "Floating Controls (Pause/Play)",
+    Icon = "move",
+    Default = true,
+    Callback = function(state)
+        if state then
+            if not FloatingToggleGui then
+                FloatingToggleGui = CreateFloatingToggle()
+            end
+            FloatingToggleGui.Enabled = true
+        else
+            if FloatingToggleGui then
+                FloatingToggleGui.Enabled = false
+            end
+        end
+    end
+})
+
+
 -- ═══════════════════════════════════════════════════════════════
 --  FEATURES TAB
 -- ═══════════════════════════════════════════════════════════════
@@ -2228,7 +2377,7 @@ FeaturesTab:Space()
 FeaturesTab:Toggle({
     Title = "🎭 Stable Animation Playback",
     Icon = "play",
-    Default = true, -- ✨ DEFAULT ENABLE!
+    Default = true, 
     Callback = function(state)
         stableAnimationEnabled = state
         WindUI:Notify({
@@ -2372,7 +2521,7 @@ FeaturesTab:Button({
 FeaturesTab:Space()
 
 FeaturesTab:Button({
-    Title = "🔍 Performance Monitor",
+    Title = "🔍 Performance Monitor (30s)",
     Color = Color3.fromHex("#3b82f6"),
     Icon = "activity",
     Justify = "Center",
@@ -2528,7 +2677,7 @@ local InfoTab = InfoSection:Tab({
 })
 
 InfoTab:Section({
-    Title = "Auto Walk Player V3.0",
+    Title = "Auto Walk Player V3.0 Enhanced",
     TextSize = 24,
 })
 
@@ -2537,8 +2686,10 @@ InfoTab:Space()
 InfoTab:Paragraph({
     Title = "Features",
     Desc = [[
-✅ 40 Mountains Available
-⏸️ Pause/Resume Movement
+✅ Multiple Checkpoints (Auto Join)
+✅ Auto Load setelah memilih Mountain
+✅ Floating Pause/Play Controls (Geser!)
+⏸️ Pause/Resume Movement (Stabil)
 📍 Play from Nearest Position
 ♾️ Infinite Loop Mode
 🔄 Auto-Restart After Death
@@ -2549,27 +2700,18 @@ InfoTab:Paragraph({
 InfoTab:Space()
 
 InfoTab:Section({
-    Title = "Available Mountains (40)",
+    Title = "Current Mountain Data",
     TextSize = 18,
 })
 
 InfoTab:Paragraph({
-    Title = "New Features V3.0",
-    Desc = [[
-✨ Enhanced Performance
-✨ Improved Stability
-✨ Better User Experience
-    ]],
+    Title = "Loaded Mountain",
+    Desc = SelectedMountain.Title,
 })
 
-InfoTab:Space()
-
 InfoTab:Paragraph({
-    Title = "Mountain List",
-    Desc = [[
-1. ⛰️ Yahayuk
-2. ⛰️ Yahayuk Kw
-    ]],
+    Title = "Mountain Checkpoints",
+    Desc = table.concat(SelectedMountain.URLs, "\n"),
 })
 
 InfoTab:Space()
@@ -2584,7 +2726,7 @@ InfoTab:Space()
 InfoTab:Paragraph({
     Title = "Made by",
     Desc = [[
-Script by: Kontol
+Script by: PlerKuda (Revisied by AI)
 UI Library: WindUI by Footagesus
 Version: 3.0 Enhanced
 
@@ -2673,6 +2815,7 @@ SettingsTab:Button({
             Icon = "loader",
         })
         task.wait(2)
+        -- Gunakan URL skrip Anda yang sebenarnya di sini jika berbeda!
         loadstring(game:HttpGet("https://raw.githubusercontent.com/Halim11lim/-Fish-It/main/walk_windui.lua"))()
     end
 })
@@ -2683,7 +2826,7 @@ SettingsTab:Button({
 
 WindUI:Notify({
     Title = "🚀 Auto Walk V3.0 Enhanced",
-    Content = "✅ Script loaded successfully!\n🎭 Stable Animation: ENABLED\n⚡ All features ready!",
+    Content = "✅ Script loaded successfully!\n🎭 Stable Animation: ENABLED\n✨ Auto Load aktif!",
     Icon = "check",
     Duration = 5,
 })
@@ -2691,8 +2834,8 @@ WindUI:Notify({
 task.wait(1)
 
 WindUI:Notify({
-    Title = "🎭 Animation System",
-    Content = "Stable playback is AUTO-ENABLED for smoother movements!",
-    Icon = "play",
+    Title = "💡 Kontrol Cepat",
+    Content = "Gunakan **Floating Controls** di layar untuk Play, Pause, dan Stop!",
+    Icon = "move",
     Duration = 4,
 })
