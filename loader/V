@@ -1,6 +1,8 @@
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
+local HttpService = game:GetService("HttpService") -- ✨ BARU: Inisialisasi HttpService
 local player = Players.LocalPlayer
 
 -- Load WindUI Library
@@ -184,7 +186,7 @@ local function ToggleCarryAnimation(enabled)
         local success = WeldArmsForCarry()
         if success then
             WindUI:Notify({
-                Title = "� Animasi Gendong Aktif",
+                Title = " Animasi Gendong Aktif",
                 Content = "animasi gendong aktig!",
                 Icon = "check-circle",
             })
@@ -199,7 +201,7 @@ local function ToggleCarryAnimation(enabled)
     else
         UnweldArmsFromCarry()
         WindUI:Notify({
-            Title = "� Animasi Gendong Nonaktif",
+            Title = " Animasi Gendong Nonaktif",
             Content = "Animas gendong dimatikan.",
             Icon = "nonaktif",
         })
@@ -609,7 +611,7 @@ function PlaybackPlayer:StopAnimationSmooth(track, fadeTime)
             track:Stop(fadeTime)
         end
     end)
-end
+}
 
 function PlaybackPlayer:TransitionAnimation(oldTrack, newAnimData, fadeTime)
     fadeTime = fadeTime or 0.15
@@ -1329,7 +1331,7 @@ player.CharacterAdded:Connect(function(newChar)
         end
         
         if fpsBoostEnabled then
-            ApplyFPSBoost()
+            EnableFPSBoost() -- Fix: Use the correct function name
         end
         
         if _G.ShouldAutoRestart and playbackPlayer and #playbackPlayer.recording > 0 then
@@ -1642,7 +1644,11 @@ local function CreateFloatingToggle()
             end
         else
             Toggle1Switch.BackgroundColor3 = Color3.fromRGB(71, 85, 105)
-            Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -8), "Out", "Quad", 0.2, true)
+            if isMobile then
+                Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -11), "Out", "Quad", 0.2, true)
+            else
+                Toggle1Knob:TweenPosition(UDim2.new(0, 2, 0.5, -8), "Out", "Quad", 0.2, true)
+            end
             
             -- Stop
             if playbackPlayer then
@@ -1829,11 +1835,13 @@ local function LoadMountain(name, urls)
                 continue
             end
             
-            local loadSuccess, result = pcall(function()
-                return loadstring("return " .. response)()
+            -- ✨ PERBAIKAN: Menggunakan JSONDecode untuk parse data lebih aman
+            local decodeSuccess, result = pcall(function()
+                return HttpService:JSONDecode(response) -- Menggunakan JSON DECODE STANDAR
             end)
             
-            if loadSuccess and type(result) == "table" and #result > 0 then
+            -- Cek apakah decode berhasil dan hasilnya adalah tabel dengan isi
+            if decodeSuccess and type(result) == "table" and #result > 0 then
                 
                 -- Gabungkan Recording
                 for _, frame in ipairs(result) do
@@ -1850,9 +1858,13 @@ local function LoadMountain(name, urls)
                 
                 -- Update offset untuk file berikutnya
                 if #result > 0 then
-                    local lastFrameTime = result[#result][1]
-                    timeOffset = timeOffset + lastFrameTime
-                    totalDuration = totalDuration + lastFrameTime
+                    -- Cek format frame sebelum mengambil [1]
+                    local lastFrameTime = type(result[#result]) == "table" and result[#result][1] or 0
+                    
+                    if lastFrameTime > 0 then
+                        timeOffset = timeOffset + lastFrameTime
+                        totalDuration = totalDuration + lastFrameTime
+                    end
                 end
                 
                 totalFrames = totalFrames + #result
@@ -1861,7 +1873,7 @@ local function LoadMountain(name, urls)
             else
                 WindUI:Notify({
                     Title = "Warning",
-                    Content = string.format("File %d (Format Invalid): %s", i, url),
+                    Content = string.format("File %d (JSON Format Invalid): %s", i, url),
                     Icon = "x",
                 })
             end
@@ -1980,6 +1992,7 @@ MainTab:Button({
     Justify = "Center",
     Callback = function()
         if SelectedMountain then
+            -- PASTIKAN MENGGUNAKAN .URLs (JAMAK)
             LoadMountain(SelectedMountain.Title, SelectedMountain.URLs) 
         end
     end
